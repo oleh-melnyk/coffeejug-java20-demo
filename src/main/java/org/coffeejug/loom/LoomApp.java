@@ -3,11 +3,13 @@ package org.coffeejug.loom;
 import static java.lang.System.out;
 
 import com.github.javafaker.Faker;
+import com.sun.source.tree.Scope;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.random.RandomGenerator;
+import jdk.incubator.concurrent.ScopedValue;
 import jdk.incubator.concurrent.StructuredTaskScope;
 import lombok.Builder;
 import lombok.SneakyThrows;
@@ -25,7 +27,7 @@ public class LoomApp {
     }
   }
 
-  final static ThreadLocal<PaymentState> PAYMENT_STATE = new ThreadLocal<>();
+  final static ScopedValue<PaymentState> PAYMENT_STATE = ScopedValue.newInstance();
 
   public static void main(String[] args) {
     var state = PaymentState.builder()
@@ -35,11 +37,10 @@ public class LoomApp {
         .id("1111")
         .build();
 
-    PAYMENT_STATE.set(state);
-    PaymentClient.process();
-    PAYMENT_STATE.remove();
+    out.println(PAYMENT_STATE.isBound());
+    ScopedValue.where(PAYMENT_STATE, state).run(PaymentClient::processAsync);
   }
-  
+
   static class PaymentClient {
 
     @SneakyThrows
@@ -53,13 +54,15 @@ public class LoomApp {
     @SneakyThrows
     public static void processAsync() {
       try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+        Thread.ofVirtual().start(() -> out.println(PAYMENT_STATE.isBound()));
         Future<String> status = scope.fork(PaymentService::doTransaction);
         Future<String> customerContact = scope.fork(CustomerCRM::fetchCustomerContact);
 
         scope.join();
         scope.throwIfFailed();
 
-        notifyCustomer(status.resultNow(), customerContact.resultNow());
+        ScopedValue.where(PAYMENT_STATE,PAYMENT_STATE.get().masked() )
+            .run(() -> notifyCustomer(status.resultNow(), customerContact.resultNow()));
       }
     }
 
